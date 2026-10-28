@@ -19,6 +19,11 @@ Model strategy (local Ollama only, no paid APIs):
   * qwen3-coder:30b is the documented optional Developer upgrade on
     stronger hardware; it is deliberately NOT the default because 30B
     models are too slow on CPU.
+  * LLAMA_SERVER_URL switches the backend: when set, agents talk to
+    that local server (e.g. llama.cpp on the GPU) as an
+    OpenAI-compatible endpoint instead of Ollama. The "openai/"
+    prefix only selects the API dialect; requests go to the local
+    URL, never to OpenAI. Unset means Ollama on localhost:11434.
 
 Progress reporting: run.py passes a task_callback that prints one
 line per finished task (plus a plan upfront and phase totals).
@@ -66,6 +71,22 @@ def model_for_role(role_key):
                           os.environ.get("OLLAMA_MODEL", "qwen3:8b"))
 
 
+def llm_for_role(role_key):
+    """Build the LLM for a role, honoring LLAMA_SERVER_URL.
+
+    When LLAMA_SERVER_URL is set, LiteLLM talks to that local server
+    (e.g. llama.cpp on the GPU) as an OpenAI-compatible endpoint; the
+    model name is a label -- the server serves whatever it loaded.
+    Otherwise the role talks to Ollama on localhost:11434.
+    """
+    llama_url = os.environ.get("LLAMA_SERVER_URL")
+    if llama_url:
+        return LLM(model=f"openai/{model_for_role(role_key)}",
+                   base_url=llama_url, api_key="local")
+    return LLM(model=f"ollama/{model_for_role(role_key)}",
+               base_url="http://localhost:11434")
+
+
 def _load_yaml(name):
     with open(_HERE / name, encoding="utf-8") as handle:
         return yaml.safe_load(handle)
@@ -80,8 +101,7 @@ def build_agents():
             role=cfg["role"],
             goal=cfg["goal"],
             backstory=cfg["backstory"],
-            llm=LLM(model=f"ollama/{model_for_role(key)}",
-                     base_url="http://localhost:11434"),
+            llm=llm_for_role(key),
             tools=[TOOLS_BY_NAME[name] for name in cfg.get("tools", [])],
             allow_delegation=cfg.get("allow_delegation", False),
             verbose=False,

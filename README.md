@@ -152,6 +152,11 @@ models are too slow on CPU. Keep tool use minimal per agent: small
 local models are fragile with complex tool chains, so agents produce
 structured Markdown artifacts instead of long tool loops.
 
+Backend switch: set `LLAMA_SERVER_URL` (e.g.
+`http://localhost:8080/v1`) to point the crew at a local llama.cpp
+server instead of Ollama — the GPU path for the 2017 iMac via Vulkan.
+Unset means Ollama as before.
+
 Preflight (also wired into pytest via `tests/conftest.py`, skippable
 with `SCRUM_SKIP_PREFLIGHT=1`) checks the Python version, installs
 missing pip packages, and checks Ollama reachability — it prints fix
