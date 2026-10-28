@@ -128,6 +128,13 @@ ollama pull qwen3:8b
 .venv/bin/python -m scrum_crew.run --auto   # skip gates (unattended)
 ```
 
+Progress: a real run prints the plan upfront (numbered tasks with
+agent names), then one line per finished task with elapsed time and
+the next task, plus a phase total — the same lines are appended to
+`outputs/progress.log`. Model reasoning traces stay off
+(`verbose=False`), so the terminal shows where the run is without
+flooding it.
+
 Model strategy: the default model for **all** roles is `qwen3:8b`,
 the daily-driver local model and the strongest choice that runs at
 usable speed on a CPU-only Intel Mac. Override with `OLLAMA_MODEL`,

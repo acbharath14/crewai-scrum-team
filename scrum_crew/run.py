@@ -27,6 +27,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -166,6 +167,79 @@ def run_demo():
     return 0 if all_done else 1
 
 
+def _fmt_elapsed(seconds):
+    """Format a duration as MmSs (e.g. 65 -> '1m05s')."""
+    total = int(seconds)
+    return f"{total // 60}m{total % 60:02d}s"
+
+
+def _append_log(log_path, line):
+    """Append one progress line to the log file (best effort)."""
+    try:
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
+
+
+class PhaseProgress:
+    """Task-level progress for one crew phase (stdlib only, no CrewAI).
+
+    Passed as the crew's task_callback: CrewAI calls it once per
+    finished task, and tasks run sequentially in plan order, so the
+    k-th call is the k-th plan entry. The callback argument (the
+    task output) is intentionally ignored -- the line is built from
+    the plan, the agent role, and the measured elapsed time.
+
+    Every printed line is also appended to the progress log, so a
+    second terminal (or a later look) shows where the run got to.
+    """
+
+    def __init__(self, phase_name, plan, log_path):
+        self.phase_name = phase_name
+        self.plan = list(plan)
+        self.log_path = log_path
+        self.index = 0
+        self.phase_start = None
+        self.last_mark = None
+
+    def _emit(self, line):
+        print(line, flush=True)
+        _append_log(self.log_path, line)
+
+    def start(self):
+        """Print the plan upfront and start the phase clock."""
+        self.phase_start = time.monotonic()
+        self.last_mark = self.phase_start
+        total = len(self.plan)
+        for i, (name, role) in enumerate(self.plan, start=1):
+            print(f"  {i}. {name} ({role})")
+        print(f"  ({total} tasks -- one line per finished task below)")
+
+    def __call__(self, *args):
+        """Record one finished task; called by CrewAI per task."""
+        if self.index >= len(self.plan):
+            return
+        name, role = self.plan[self.index]
+        now = time.monotonic()
+        elapsed = _fmt_elapsed(now - self.last_mark)
+        self.last_mark = now
+        self.index += 1
+        total = len(self.plan)
+        if self.index < total:
+            nxt = self.plan[self.index][0]
+            tail = f"-> next: {nxt}"
+        else:
+            tail = "-> phase done"
+        self._emit(f"[{self.index}/{total}] {name} done -- {role}, "
+                   f"{elapsed} {tail}")
+
+    def finish(self):
+        """Print the phase total."""
+        total = _fmt_elapsed(time.monotonic() - self.phase_start)
+        self._emit(f"{self.phase_name} done in {total}")
+
+
 def _ollama_reachable():
     try:
         with urllib.request.urlopen("http://localhost:11434/api/tags",
@@ -178,7 +252,13 @@ def _ollama_reachable():
 def run_real(auto):
     """Run the real CrewAI crew (needs Ollama). Returns exit code."""
     # Imported lazily so --demo never requires CrewAI installed.
-    from .crew import build_execution_crew, build_planning_crew
+    from .crew import (
+        EXECUTION_TASKS,
+        PLANNING_TASKS,
+        build_execution_crew,
+        build_planning_crew,
+        phase_plan,
+    )
 
     if not _ollama_reachable():
         print("Ollama is not reachable at http://localhost:11434.")
@@ -186,14 +266,28 @@ def run_real(auto):
         print("  ollama serve")
         print("  ollama pull qwen3:8b")
         return 2
+    OUTPUTS.mkdir(exist_ok=True)
+    log_path = OUTPUTS / "progress.log"
+    _append_log(log_path,
+                f"== run {time.strftime('%Y-%m-%d %H:%M:%S')} ==")
     print("== Phase 1: planning crew ==")
-    planning_result = build_planning_crew().kickoff()
+    planning_progress = PhaseProgress(
+        "Phase 1", phase_plan(PLANNING_TASKS), log_path)
+    planning_progress.start()
+    planning_result = build_planning_crew(
+        task_callback=planning_progress).kickoff()
+    planning_progress.finish()
     print(planning_result)
     if not auto:
         input("\n[Human gate] Product Owner: press Enter to approve "
               "sprint execution, or Ctrl-C to stop...")
     print("\n== Phase 2: execution crew ==")
-    execution_result = build_execution_crew().kickoff()
+    execution_progress = PhaseProgress(
+        "Phase 2", phase_plan(EXECUTION_TASKS), log_path)
+    execution_progress.start()
+    execution_result = build_execution_crew(
+        task_callback=execution_progress).kickoff()
+    execution_progress.finish()
     print(execution_result)
     if not auto:
         input("\n[Human gate] Product Owner final sign-off: press Enter "

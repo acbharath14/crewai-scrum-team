@@ -19,6 +19,11 @@ Model strategy (local Ollama only, no paid APIs):
   * qwen3-coder:30b is the documented optional Developer upgrade on
     stronger hardware; it is deliberately NOT the default because 30B
     models are too slow on CPU.
+
+Progress reporting: run.py passes a task_callback that prints one
+line per finished task (plus a plan upfront and phase totals).
+verbose stays False everywhere, so model reasoning traces never
+flood the terminal -- the progress lines are the feedback.
 """
 
 from __future__ import annotations
@@ -101,7 +106,23 @@ def build_tasks(agents, wanted):
     return [tasks[name] for name in wanted]
 
 
-def build_planning_crew():
+def phase_plan(wanted):
+    """Return [(task_name, agent_role)] for the named stages, in order.
+
+    Used by run.py to print the plan upfront and to label progress
+    lines; the order matches build_tasks, and tasks run sequentially,
+    so the k-th task_callback call is the k-th plan entry.
+    """
+    task_configs = _load_yaml("tasks.yaml")
+    agent_configs = _load_yaml("agents.yaml")
+    plan = []
+    for name in wanted:
+        agent_key = task_configs[name]["agent"]
+        plan.append((name, agent_configs[agent_key]["role"]))
+    return plan
+
+
+def build_planning_crew(task_callback=None):
     """Crew for Phase 1: epic -> stories -> estimates -> DoR."""
     agents = build_agents()
     return Crew(
@@ -109,10 +130,11 @@ def build_planning_crew():
         tasks=build_tasks(agents, PLANNING_TASKS),
         process=Process.sequential,
         verbose=False,
+        task_callback=task_callback,
     )
 
 
-def build_execution_crew():
+def build_execution_crew(task_callback=None):
     """Crew for Phase 2: tests -> implement -> deploy -> validate -> close."""
     agents = build_agents()
     return Crew(
@@ -120,4 +142,5 @@ def build_execution_crew():
         tasks=build_tasks(agents, EXECUTION_TASKS),
         process=Process.sequential,
         verbose=False,
+        task_callback=task_callback,
     )
