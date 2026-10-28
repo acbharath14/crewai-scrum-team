@@ -4,3 +4,8 @@ crewai==1.15.30
 litellm==1.106.4
 pytest==9.1.1
 pyyaml==6.0.3
+
+# Intel macOS only: cryptography 50.x ships no x86_64 wheel, so pip falls
+# back to a failing Rust source build (no OpenSSL headers). 48.0.1 is the
+# newest version with an Intel wheel. Other platforms ignore this line.
+cryptography==48.0.1; sys_platform == "darwin" and platform_machine == "x86_64"

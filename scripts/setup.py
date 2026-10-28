@@ -20,7 +20,11 @@ what is already done):
      --no-deps plus CrewAI's other dependencies, parsed from the wheel
      metadata) and then proves the crew still builds -- this repo's
      crews use artifact handoffs, not CrewAI memory, so LanceDB is
-     never imported at runtime.
+     never imported at runtime. On Intel macOS the fallback also pins
+     cryptography==48.0.1, the newest version with an Intel wheel
+     (50.x has none and falls back to a failing Rust source build).
+     Set SCRUM_SETUP_FORCE_FALLBACK=1 to exercise the fallback path on
+     any platform (debugging aid).
   5. Checks Ollama: starts a background `ollama serve` if the server
      is not reachable, then pulls the default model (qwen3:8b, or
      $OLLAMA_MODEL) if it is not already present. Ollama itself is
@@ -43,6 +47,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -196,7 +201,15 @@ def install_without_lancedb(venv_python, reqs):
     if proc.returncode != 0:
         print_tail(proc)
         fail("could not install crewai --no-deps")
-    proc = run_captured([str(venv_python), "-m", "pip", "install", *deps])
+    install_list = list(deps)
+    if sys.platform == "darwin" and platform.machine() == "x86_64":
+        # Newest cryptography with an Intel wheel (50.x has none); without
+        # this pip picks 50.x and falls back to a failing Rust source build.
+        install_list.append("cryptography==48.0.1")
+        log("Intel macOS: pinning cryptography==48.0.1 "
+            "(newest with an Intel wheel)")
+    proc = run_captured([str(venv_python), "-m", "pip", "install",
+                         *install_list])
     if proc.returncode != 0:
         print_tail(proc)
         fail("could not install crewai's dependencies (minus lancedb)")
@@ -214,6 +227,10 @@ def install_without_lancedb(venv_python, reqs):
 
 def install_requirements(venv_python):
     """Install requirements.txt; returns 'full' or 'no-lancedb'."""
+    if os.environ.get("SCRUM_SETUP_FORCE_FALLBACK") == "1":
+        log("forcing lancedb-free fallback (SCRUM_SETUP_FORCE_FALLBACK=1)")
+        install_without_lancedb(venv_python, read_requirements())
+        return "no-lancedb"
     proc = run_captured([str(venv_python), "-m", "pip", "install",
                          "-r", str(ROOT / "requirements.txt")])
     if proc.returncode == 0:
