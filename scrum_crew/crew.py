@@ -71,6 +71,22 @@ def model_for_role(role_key):
                           os.environ.get("OLLAMA_MODEL", "qwen3:8b"))
 
 
+def llm_timeout_seconds(llama_url):
+    """Per-call timeout in seconds, overridable via CREW_LLM_TIMEOUT.
+
+    Converge-style tasks have large prompts and long thinking
+    generations, so the default client timeout fires before the
+    server finishes, leaving a server request that keeps generating
+    while the crew reports a timeout. The llama-server path gets a
+    60-minute default, Ollama 30 minutes; both are per call, not
+    per run, and both can be overridden with CREW_LLM_TIMEOUT.
+    """
+    override = os.environ.get("CREW_LLM_TIMEOUT")
+    if override:
+        return int(override)
+    return 3600 if llama_url else 1800
+
+
 def llm_for_role(role_key):
     """Build the LLM for a role, honoring LLAMA_SERVER_URL.
 
@@ -80,11 +96,13 @@ def llm_for_role(role_key):
     Otherwise the role talks to Ollama on localhost:11434.
     """
     llama_url = os.environ.get("LLAMA_SERVER_URL")
+    timeout = llm_timeout_seconds(llama_url)
     if llama_url:
         return LLM(model=f"openai/{model_for_role(role_key)}",
-                   base_url=llama_url, api_key="local")
+                   base_url=llama_url, api_key="local",
+                   timeout=timeout)
     return LLM(model=f"ollama/{model_for_role(role_key)}",
-               base_url="http://localhost:11434")
+               base_url="http://localhost:11434", timeout=timeout)
 
 
 def _load_yaml(name):
