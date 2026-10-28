@@ -1,0 +1,174 @@
+# Task definitions for the Scrum crew (CrewAI YAML config).
+# Two phases, sequential process:
+#   Phase 1 (planning):  define_epic -> break_down_stories ->
+#     estimate_* -> converge_estimates -> dor_gate
+#   PO approval gate (human-in-the-loop, skipped with --auto)
+#   Phase 2 (execution): write_acceptance_tests -> implement ->
+#     deploy_and_smoke -> validate -> handle_rework ->
+#     sprint_review -> retrospective -> po_signoff
+# Each task's `context` lists the earlier tasks its output builds on.
+
+define_epic:
+  description: >
+    Write the business epic as Markdown: business goal, why now, scope,
+    explicit out-of-scope items, and accepted tech debt. Save it to
+    outputs/epic.md.
+  expected_output: >
+    A Markdown epic file with goal, scope, out-of-scope, and tech debt.
+  agent: product_owner
+
+break_down_stories:
+  description: >
+    Break the epic into small user stories (INVEST-shaped), each with
+    an id, title, description, acceptance criteria with ids, a
+    dependencies list (empty when none), a risks list (empty when
+    none), and testable: true. Save as outputs/stories.json.
+  expected_output: >
+    A JSON file of stories, each complete per the schema.
+  agent: analyst
+  context: [define_epic]
+
+estimate_developer:
+  description: >
+    Independently estimate every story in Fibonacci points (1, 2, 3,
+    5, 8, 13, 21) from the implementation angle, with one sentence of
+    rationale per story. Do not look at other estimators' numbers;
+    write your own. Save to outputs/estimates_developer.json.
+  expected_output: >
+    A JSON file mapping story id to {points, rationale}.
+  agent: developer
+  context: [break_down_stories]
+
+estimate_sdet:
+  description: >
+    Independently estimate every story in Fibonacci points from the
+    testability angle (criteria clarity, edge cases, test effort),
+    with one sentence of rationale per story. Do not look at other
+    estimators' numbers. Save to outputs/estimates_sdet.json.
+  expected_output: >
+    A JSON file mapping story id to {points, rationale}.
+  agent: sdet
+  context: [break_down_stories]
+
+estimate_analyst:
+  description: >
+    Independently estimate every story in Fibonacci points from the
+    clarity/complexity angle, with one sentence of rationale per
+    story. Do not look at other estimators' numbers. Save to
+    outputs/estimates_analyst.json.
+  expected_output: >
+    A JSON file mapping story id to {points, rationale}.
+  agent: analyst
+  context: [break_down_stories]
+
+converge_estimates:
+  description: >
+    Converge the three independent estimates per story: when the
+    highest and lowest are more than one Fibonacci step apart, flag
+    the story DIVERGENT with no locked value and a note that a
+    discussion is required; otherwise lock the median. Save to
+    outputs/estimates_locked.json.
+  expected_output: >
+    A JSON file per story: the three estimates, spread, divergent
+    flag, and locked value (null when divergent).
+  agent: scrum_master
+  context: [estimate_developer, estimate_sdet, estimate_analyst]
+
+dor_gate:
+  description: >
+    Apply the Definition of Ready to every story: acceptance criteria
+    present and clear, dependencies identified, locked estimate
+    present and at most 8 points, testable true. Report per story
+    PASS/FAIL with the missing items. Only PASS stories enter the
+    sprint. Save to outputs/dor_report.md.
+  expected_output: >
+    A Markdown DoR report listing PASS/FAIL per story with reasons.
+  agent: analyst
+  context: [break_down_stories, converge_estimates]
+
+write_acceptance_tests:
+  description: >
+    For every sprint story (DoR PASS only), write acceptance tests
+    derived FROM its acceptance criteria, one test per criterion or
+    rejection path, and record the criterion-to-test mapping in
+    outputs/tests_map.json. Tests must reference criterion ids.
+  expected_output: >
+    Acceptance tests plus a criterion-to-test mapping file.
+  agent: sdet
+  context: [dor_gate]
+
+implement:
+  description: >
+    Implement every sprint story, referencing the story id in code
+    and commit-style notes. Keep the test suite green as you go.
+    Save implementation notes to outputs/implementation_notes.md.
+  expected_output: >
+    Working code plus implementation notes citing story ids.
+  agent: developer
+  context: [write_acceptance_tests]
+
+deploy_and_smoke:
+  description: >
+    Deploy locally: start the app server on localhost and smoke check
+    each sprint story's happy path. "Deploy" here means local only --
+    no cloud target exists. Record the smoke result in
+    outputs/deploy_smoke.md.
+  expected_output: >
+    A Markdown smoke report: server started, checks run, result.
+  agent: developer
+  context: [implement]
+
+validate:
+  description: >
+    Validate the deployed increment against the ORIGINAL acceptance
+    criteria (not against what was built). Produce a traceability
+    matrix: every criterion -> test(s) -> PASS/FAIL verdict ->
+    evidence. No verdict without a cited criterion. Save to
+    outputs/validation_report.md.
+  expected_output: >
+    A Markdown validation report with the full traceability matrix.
+  agent: sdet
+  context: [deploy_and_smoke, write_acceptance_tests]
+
+handle_rework:
+  description: >
+    For every FAIL in the validation report: file a bug story back to
+    the Developer for a fix and re-validation round. At most 2 rework
+    rounds are allowed; on the 3rd failure the item escalates to the
+    Product Owner for a scope / split / reject decision instead of
+    looping forever. Record the outcome in outputs/rework_log.md.
+  expected_output: >
+    A rework log: per failed item, rework rounds used or escalation.
+  agent: scrum_master
+  context: [validate]
+
+sprint_review:
+  description: >
+    Summarize the increment demonstrated, what the Product Owner
+    accepted, and what went to the backlog. Any requirement discovered
+    mid-sprint goes to the backlog, never into the running sprint.
+    Save to outputs/review.md.
+  expected_output: >
+    A Markdown sprint review with accepted items and backlog adds.
+  agent: scrum_master
+  context: [validate, handle_rework]
+
+retrospective:
+  description: >
+    Run the retrospective: what went well, what to improve, and
+    action items with owners that carry into the next sprint. Save
+    to outputs/retrospective.md.
+  expected_output: >
+    A Markdown retrospective with owned action items.
+  agent: scrum_master
+  context: [sprint_review]
+
+po_signoff:
+  description: >
+    Final Product Owner sign-off: confirm the increment matches the
+    original epic, list accepted stories, and record any rejections
+    or scope decisions. Save to outputs/signoff.md.
+  expected_output: >
+    A Markdown sign-off naming accepted and rejected items.
+  agent: product_owner
+  context: [sprint_review, retrospective]
