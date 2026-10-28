@@ -135,6 +135,12 @@ the next task, plus a phase total — the same lines are appended to
 (`verbose=False`), so the terminal shows where the run is without
 flooding it.
 
+Tool confinement: agents can only read and write inside the repo
+directory, and test runs are confined to `tests/` — anything outside
+is refused with a plain message, not an exception. Every successful
+write is logged to `outputs/tool-calls.log`, so you can audit exactly
+what the crew changed.
+
 Model strategy: the default model for **all** roles is `qwen3:8b`,
 the daily-driver local model and the strongest choice that runs at
 usable speed on a CPU-only Intel Mac. Override with `OLLAMA_MODEL`,
