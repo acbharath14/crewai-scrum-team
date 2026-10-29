@@ -155,6 +155,19 @@ def validate_epic(epic):
     return errors
 
 
+def criterion_text(criterion):
+    """Return a criterion's statement, whatever field name it uses.
+
+    The story task never mandated a field name for criterion text,
+    so agents naturally write "description", matching the story's
+    own description field. Accept "text" and "description"; an id
+    with neither is still a missing statement, not a pass.
+    """
+    if not isinstance(criterion, dict):
+        return None
+    return criterion.get("text") or criterion.get("description")
+
+
 def validate_story(story):
     """Return a list of problems with a story dict (empty means valid)."""
     errors = []
@@ -173,7 +186,7 @@ def validate_story(story):
         for criterion in criteria:
             if not isinstance(criterion, dict) or not criterion.get("id"):
                 errors.append("acceptance criterion is missing id")
-            elif not criterion.get("text"):
+            elif not criterion_text(criterion):
                 errors.append(f"criterion {criterion['id']} has no text")
     if "dependencies" not in story:
         errors.append("story does not identify dependencies (use [] if none)")
@@ -239,7 +252,7 @@ def dod_check(story_id, evidence):
 def build_traceability(criteria, test_results, mapping):
     """Build one matrix row per acceptance criterion.
 
-    criteria: [{"id", "text"}] from the original story spec.
+    criteria: [{"id", "text"|"description"}] from the original story spec.
     test_results: {test node id: "PASS"|"FAIL"|"SKIPPED"|"ERROR"}.
     mapping: {criterion id: [test node ids]}.
 
@@ -264,7 +277,7 @@ def build_traceability(criteria, test_results, mapping):
             verdict = "NOT-RUN"
         rows.append({
             "criterion_id": criterion["id"],
-            "criterion_text": criterion["text"],
+            "criterion_text": criterion_text(criterion),
             "tests": tests,
             "outcomes": outcomes,
             "verdict": verdict,
