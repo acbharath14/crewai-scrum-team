@@ -62,6 +62,59 @@ def converge_estimates(developer, sdet, analyst):
 
 
 # ---------------------------------------------------------------------------
+# Advisory estimation (real crew path, not the demo gate)
+# ---------------------------------------------------------------------------
+
+def advisory_lock(developer, sdet, analyst):
+    """Lock an advisory median, never null when estimates are valid.
+
+    The strict converge_estimates() gate above is kept for the demo
+    replay and its tests. For a real agent crew, estimation is
+    advisory: estimators are uncalibrated LLMs, and a spread in
+    points is not a reason to block work. This function reuses the
+    same Fibonacci math, but locked is always the median, and
+    divergent is only a warning flag. A story with estimates
+    [5, 8, 8] therefore locks at 8, not null: one Fibonacci step,
+    not a divergence that should kill a sprint.
+    """
+    result = converge_estimates(developer, sdet, analyst)
+    locked = sorted([developer, sdet, analyst])[1]
+    return {
+        "estimates": result["estimates"],
+        "spread_steps": result["spread_steps"],
+        "spread_points": max([developer, sdet, analyst])
+        - min([developer, sdet, analyst]),
+        "divergent": result["divergent"],
+        "locked": locked,
+    }
+
+
+def dor_check_advisory(story, locked_estimate):
+    """DoR without a points gate: criteria, dependencies, testable.
+
+    Locked estimate is advisory only. A missing locked value, or a
+    value above MAX_READY_POINTS, is a warning, not a failure, so a
+    story is never failed solely because estimators disagreed or
+    because an LLM miscalculated a spread. Returns
+    {"passed": bool, "missing": [...], "warnings": [...]}.
+    """
+    missing = []
+    missing.extend(validate_story(story))
+    if story.get("testable") is not True:
+        missing.append("story is not marked testable")
+    warnings = []
+    if locked_estimate is None:
+        warnings.append("no locked estimate (advisory only)")
+    elif locked_estimate > MAX_READY_POINTS:
+        warnings.append(
+            f"locked estimate {locked_estimate} exceeds {MAX_READY_POINTS} "
+            "points: consider splitting, not a DoR failure"
+        )
+    return {"passed": not missing, "missing": missing,
+            "warnings": warnings}
+
+
+# ---------------------------------------------------------------------------
 # Artifact schema validation
 # ---------------------------------------------------------------------------
 

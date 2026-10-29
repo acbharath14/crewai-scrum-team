@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -33,10 +34,12 @@ import urllib.error
 from pathlib import Path
 
 from .pipeline import (
+    advisory_lock,
     build_traceability,
     converge_estimates,
     dod_check,
     dor_check,
+    dor_check_advisory,
     next_step_after_failure,
     render_traceability_markdown,
     validate_story,
@@ -249,6 +252,212 @@ def _ollama_reachable():
         return False
 
 
+def _url_reachable(url):
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            return resp.status == 200
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def _backend_reachable():
+    """Check the backend the crew will actually use, not just Ollama.
+
+    The old check always probed Ollama, so a llama-server run could
+    abort because Ollama was off even though its server was healthy,
+    or pass because Ollama was on while its server was off.
+    """
+    llama_url = os.environ.get("LLAMA_SERVER_URL")
+    if llama_url:
+        base = llama_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3].rstrip("/")
+        return _url_reachable(f"{base}/health")
+    return _ollama_reachable()
+
+
+def _estimate_value(entry):
+    """Extract a Fibonacci point from an estimate file entry.
+
+    Estimate files map story id to {points, rationale} (the task
+    format), or to a bare int. Anything else is invalid, not a
+    guessable number.
+    """
+    if isinstance(entry, int) and not isinstance(entry, bool):
+        return entry
+    if isinstance(entry, dict):
+        points = entry.get("points")
+        if isinstance(points, int) and not isinstance(points, bool):
+            return points
+    return None
+
+
+def _validate_outputs(outputs_dir, expected):
+    """Validate expected output files: exist, non-empty, JSON parses.
+
+    expected maps task name to (filename, owner role). Returns a
+    list of error strings naming the owner and file, empty on pass.
+    A task counts as done only when its file exists; terminal text
+    alone is not done.
+    """
+    errors = []
+    for task_name, (filename, owner) in expected.items():
+        path = Path(outputs_dir) / filename
+        if not path.exists():
+            errors.append(f"{task_name} ({owner}): missing {filename}")
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"{task_name} ({owner}): unreadable {filename}: {exc}")
+            continue
+        if not text.strip():
+            errors.append(f"{task_name} ({owner}): empty {filename}")
+            continue
+        if filename.endswith(".json"):
+            try:
+                json.loads(text)
+            except json.JSONDecodeError as exc:
+                errors.append(f"{task_name} ({owner}): invalid JSON in {filename}: {exc}")
+    return errors
+
+
+def _build_sprint_json(outputs_dir):
+    """Build outputs/sprint.json deterministically from Phase 1 files.
+
+    This is the contract Phase 2 and PO sign-off read. It is computed
+    with pipeline.advisory_lock() and dor_check_advisory(), not taken
+    from the LLM's estimates_locked.json, so an LLM spread-math error
+    cannot block a story: [5, 8, 8] locks at 8, not null. Returns
+    (sprint, backlog, errors). Sprint is empty only when no story
+    passes DoR, in which case the caller must stop before Phase 2.
+    """
+    outputs_dir = Path(outputs_dir)
+    errors = []
+
+    def load_json(name):
+        path = outputs_dir / name
+        if not path.exists():
+            errors.append(f"missing {name}")
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"invalid {name}: {exc}")
+            return None
+
+    stories_doc = load_json("stories.json")
+    if stories_doc is None:
+        return [], [], errors
+    if isinstance(stories_doc, dict):
+        stories = stories_doc.get("stories")
+    else:
+        stories = stories_doc
+    if not isinstance(stories, list):
+        errors.append("stories.json has no stories list")
+        return [], [], errors
+    estimate_docs = {}
+    for role, name in (("developer", "estimates_developer.json"),
+                       ("sdet", "estimates_sdet.json"),
+                       ("analyst", "estimates_analyst.json")):
+        estimate_docs[role] = load_json(name)
+    if errors:
+        return [], [], errors
+
+    sprint, backlog = [], []
+    for story in stories:
+        story_id = story.get("id") if isinstance(story, dict) else None
+        if not story_id:
+            errors.append("story without id in stories.json")
+            continue
+        values = {}
+        for role, doc in estimate_docs.items():
+            if not isinstance(doc, dict) or story_id not in doc:
+                errors.append(f"missing estimate for {story_id} in {role} file")
+                values = None
+                break
+            points = _estimate_value(doc[story_id])
+            if points is None:
+                errors.append(f"invalid estimate for {story_id} in {role} file")
+                values = None
+                break
+            values[role] = points
+        if values is None:
+            continue
+        try:
+            lock = advisory_lock(values["developer"], values["sdet"],
+                                 values["analyst"])
+        except ValueError as exc:
+            errors.append(f"invalid estimate for {story_id}: {exc}")
+            continue
+        dor = dor_check_advisory(story, lock["locked"])
+        entry = {
+            "id": story_id,
+            "title": story.get("title"),
+            "locked": lock["locked"],
+            "estimates": lock["estimates"],
+            "spread_steps": lock["spread_steps"],
+            "divergent_advisory": lock["divergent"],
+        }
+        if dor["passed"]:
+            entry["warnings"] = dor["warnings"]
+            sprint.append(entry)
+        else:
+            entry["reasons"] = dor["missing"]
+            entry["warnings"] = dor["warnings"]
+            backlog.append(entry)
+    if errors:
+        return [], [], errors
+    sprint_doc = {"sprint": sprint, "backlog": backlog,
+                  "generated_from": ["stories.json",
+                                     "estimates_developer.json",
+                                     "estimates_sdet.json",
+                                     "estimates_analyst.json"]}
+    (outputs_dir / "sprint.json").write_text(
+        json.dumps(sprint_doc, indent=2), encoding="utf-8")
+    return sprint, backlog, errors
+
+
+def _run_test_suite(path="tests", python=sys.executable, timeout=300):
+    """Run the full pytest suite deterministically, return (ok, tail).
+
+    This is the gate the CPU run lacked: a test file like the old
+    tests/test_c1.py, which failed with NameError because it never
+    imported User, must block sign-off, not be ignored while the
+    crew prints terminal text. Timeout is 300s, matching tools.
+    """
+    try:
+        proc = subprocess.run(
+            [python, "-m", "pytest", path, "-q"],
+            capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, "test run timed out after 300s"
+    tail = (proc.stdout + proc.stderr)[-3000:]
+    return proc.returncode == 0, tail
+
+
+PHASE1_EXPECTED = {
+    "define_epic": ("epic.md", "Product Owner"),
+    "break_down_stories": ("stories.json", "Business Analyst"),
+    "estimate_developer": ("estimates_developer.json", "Developer"),
+    "estimate_sdet": ("estimates_sdet.json", "SDET"),
+    "estimate_analyst": ("estimates_analyst.json", "Business Analyst"),
+    "converge_estimates": ("estimates_locked.json", "Scrum Master"),
+    "dor_gate": ("dor_report.md", "Business Analyst"),
+}
+
+PHASE2_EXPECTED = {
+    "write_acceptance_tests": ("tests_map.json", "SDET"),
+    "implement": ("implementation_notes.md", "Developer"),
+    "deploy_and_smoke": ("deploy_smoke.md", "Developer"),
+    "validate": ("validation_report.md", "SDET"),
+    "handle_rework": ("rework_log.md", "Scrum Master"),
+    "sprint_review": ("review.md", "Scrum Master"),
+    "retrospective": ("retrospective.md", "Scrum Master"),
+    "po_signoff": ("signoff.md", "Product Owner"),
+}
+
+
 def run_real(auto):
     """Run the real CrewAI crew (needs Ollama). Returns exit code."""
     # Imported lazily so --demo never requires CrewAI installed.
@@ -260,11 +469,17 @@ def run_real(auto):
         phase_plan,
     )
 
-    if not _ollama_reachable():
-        print("Ollama is not reachable at http://localhost:11434.")
-        print("Fix with:")
-        print("  ollama serve")
-        print("  ollama pull qwen3:8b")
+    if not _backend_reachable():
+        llama_url = os.environ.get("LLAMA_SERVER_URL")
+        if llama_url:
+            print(f"Llama server is not reachable at {llama_url}.")
+            print("Fix with:")
+            print("  scripts/llama-vulkan.sh start")
+        else:
+            print("Ollama is not reachable at http://localhost:11434.")
+            print("Fix with:")
+            print("  ollama serve")
+            print("  ollama pull qwen3:8b")
         return 2
     OUTPUTS.mkdir(exist_ok=True)
     log_path = OUTPUTS / "progress.log"
@@ -278,6 +493,31 @@ def run_real(auto):
         task_callback=planning_progress).kickoff()
     planning_progress.finish()
     print(planning_result)
+    # -- Phase 1 gate: files, not terminal text, are done ------------
+    errors = _validate_outputs(OUTPUTS, PHASE1_EXPECTED)
+    if errors:
+        print("\nPhase 1 incomplete, stopping before Phase 2:")
+        for error in errors:
+            print(f"  - {error}")
+        print("Fix the named owner/file and re-run; do not proceed "
+              "to execution with a missing planning output.")
+        return 3
+    sprint, backlog, errors = _build_sprint_json(OUTPUTS)
+    if errors:
+        print("\nPhase 1 sprint contract failed, stopping before Phase 2:")
+        for error in errors:
+            print(f"  - {error}")
+        return 3
+    print(f"\nSprint scope (from outputs/sprint.json): "
+          f"{[s['id'] for s in sprint]}")
+    print(f"Backlog (not Ready): {[s['id'] for s in backlog]}")
+    if not sprint:
+        print("\nSprint scope is empty, stopping before Phase 2.")
+        print("Backlog reasons:")
+        for entry in backlog:
+            print(f"  - {entry['id']}: {'; '.join(entry.get('reasons', []))}")
+        print("No execution crew runs on an empty sprint.")
+        return 3
     if not auto:
         input("\n[Human gate] Product Owner: press Enter to approve "
               "sprint execution, or Ctrl-C to stop...")
@@ -292,6 +532,22 @@ def run_real(auto):
     if not auto:
         input("\n[Human gate] Product Owner final sign-off: press Enter "
               "to confirm, or Ctrl-C to withhold sign-off...")
+    errors = _validate_outputs(OUTPUTS, PHASE2_EXPECTED)
+    if errors:
+        print("\nPhase 2 incomplete, sprint is NOT complete:")
+        for error in errors:
+            print(f"  - {error}")
+        print("A task counts as done only when its file exists; "
+              "terminal text alone is not done.")
+        return 3
+    print("\n== Test suite gate: full pytest run ==")
+    ok, tail = _run_test_suite()
+    if not ok:
+        print("Test suite FAILED, sprint is NOT complete:")
+        print(tail)
+        print("Fix the failing tests and re-run; a red suite blocks "
+              "sign-off, even when all output files exist.")
+        return 3
     print("Sprint complete.")
     return 0
 

@@ -63,24 +63,29 @@ estimate_analyst:
 
 converge_estimates:
   description: >
-    Converge the three independent estimates per story: when the
-    highest and lowest are more than one Fibonacci step apart, flag
-    the story DIVERGENT with no locked value and a note that a
-    discussion is required; otherwise lock the median. Save to
+    Converge the three independent estimates per story into an
+    ADVISORY report: report the median as the locked value, the
+    spread in Fibonacci steps and in points, and a divergent flag
+    when the spread is more than one step. Estimation is advisory
+    only: it never blocks a story, and locked value is never null
+    when all three estimates are valid. Save to
     outputs/estimates_locked.json.
   expected_output: >
     A JSON file per story: the three estimates, spread, divergent
-    flag, and locked value (null when divergent).
+    flag (advisory only), and locked value (the median).
   agent: scrum_master
   context: [estimate_developer, estimate_sdet, estimate_analyst]
 
 dor_gate:
   description: >
-    Apply the Definition of Ready to every story: acceptance criteria
-    present and clear, dependencies identified, locked estimate
-    present and at most 8 points, testable true. Report per story
-    PASS/FAIL with the missing items. Only PASS stories enter the
-    sprint. Save to outputs/dor_report.md.
+    Apply the Definition of Ready to every story WITHOUT a points
+    gate: acceptance criteria present and clear, dependencies
+    identified, testable true. A missing locked estimate, or a
+    locked estimate above 8 points, is a warning, not a FAIL.
+    Report per story PASS/FAIL with the missing items. Only PASS
+    stories enter the sprint, and the runner writes the authoritative
+    sprint list to outputs/sprint.json from this report. Save to
+    outputs/dor_report.md.
   expected_output: >
     A Markdown DoR report listing PASS/FAIL per story with reasons.
   agent: analyst
@@ -88,10 +93,13 @@ dor_gate:
 
 write_acceptance_tests:
   description: >
-    For every sprint story (DoR PASS only), write acceptance tests
-    derived FROM its acceptance criteria, one test per criterion or
-    rejection path, and record the criterion-to-test mapping in
+    For every story listed in outputs/sprint.json as sprint
+    (DoR PASS only), write acceptance tests derived FROM its
+    acceptance criteria, one test per criterion or rejection path,
+    and record the criterion-to-test mapping in
     outputs/tests_map.json. Tests must reference criterion ids.
+    You must actually write outputs/tests_map.json with the
+    write_file tool; terminal text alone is not done.
   expected_output: >
     Acceptance tests plus a criterion-to-test mapping file.
   agent: sdet
@@ -166,8 +174,18 @@ retrospective:
 po_signoff:
   description: >
     Final Product Owner sign-off: confirm the increment matches the
-    original epic, list accepted stories, and record any rejections
-    or scope decisions. Save to outputs/signoff.md.
+    original epic, list accepted stories from outputs/sprint.json
+    and the validation report, and record backlog stories with
+    reasons. A backlog story does NOT reject the whole increment;
+    only an empty sprint rejects it, and the runner stops before
+    Phase 2 in that case. Do NOT invent required files: the contract
+    files are epic.md, stories.json, estimates_*.json,
+    estimates_locked.json, dor_report.md, sprint.json,
+    tests_map.json, implementation_notes.md, deploy_smoke.md,
+    validation_report.md, rework_log.md, review.md,
+    retrospective.md, and signoff.md, all in outputs/. You must
+    actually write outputs/signoff.md with the write_file tool;
+    terminal text alone is not done.
   expected_output: >
     A Markdown sign-off naming accepted and rejected items.
   agent: product_owner
