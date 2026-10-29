@@ -399,6 +399,7 @@ def _build_sprint_json(outputs_dir):
             "estimates": lock["estimates"],
             "spread_steps": lock["spread_steps"],
             "divergent_advisory": lock["divergent"],
+            "snapped_from": lock.get("snapped_from", {}),
         }
         if dor["passed"]:
             entry["warnings"] = dor["warnings"]

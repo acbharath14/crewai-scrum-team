@@ -65,6 +65,16 @@ def converge_estimates(developer, sdet, analyst):
 # Advisory estimation (real crew path, not the demo gate)
 # ---------------------------------------------------------------------------
 
+def snap_to_fibonacci(value):
+    """Snap a non-Fibonacci estimate to the nearest Fibonacci step.
+
+    Ties go to the lower step, so 10 snaps to 8 (distance 2, vs 3
+    to 13) and 12 snaps to 13 (distance 1, vs 4 to 8). A value
+    already on the scale is returned unchanged.
+    """
+    return min(FIBONACCI, key=lambda step: (abs(step - value), step))
+
+
 def advisory_lock(developer, sdet, analyst):
     """Lock an advisory median, never null when estimates are valid.
 
@@ -76,16 +86,29 @@ def advisory_lock(developer, sdet, analyst):
     divergent is only a warning flag. A story with estimates
     [5, 8, 8] therefore locks at 8, not null: one Fibonacci step,
     not a divergence that should kill a sprint.
+
+    Non-Fibonacci estimates are snapped to the nearest Fibonacci
+    step first, because LLM estimators do not stay on the scale
+    (10 and 12 in a real run). The original values are returned
+    in snapped_from, so the change is recorded, never silent.
+    Agent files are not rewritten; the snap lives in the
+    deterministic sprint contract only.
     """
-    result = converge_estimates(developer, sdet, analyst)
-    locked = sorted([developer, sdet, analyst])[1]
+    raw = {"developer": developer, "sdet": sdet, "analyst": analyst}
+    snapped = {role: snap_to_fibonacci(value)
+               for role, value in raw.items()}
+    snapped_from = {role: value for role, value in raw.items()
+                    if snapped[role] != value}
+    result = converge_estimates(snapped["developer"], snapped["sdet"],
+                                snapped["analyst"])
+    locked = sorted(snapped.values())[1]
     return {
         "estimates": result["estimates"],
         "spread_steps": result["spread_steps"],
-        "spread_points": max([developer, sdet, analyst])
-        - min([developer, sdet, analyst]),
+        "spread_points": max(snapped.values()) - min(snapped.values()),
         "divergent": result["divergent"],
         "locked": locked,
+        "snapped_from": snapped_from,
     }
 
 

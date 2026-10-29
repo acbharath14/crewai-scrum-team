@@ -182,7 +182,11 @@ What a defined run does, in order, with documentation at each phase:
   `sprint.json` over any agent-written list, and runs Phase 2
   only. It refuses if your `requirements.md` or `--target`
   changed since Phase 1, because Phase 2 on stale stories is
-  not a defined run. Example:
+  not a defined run. Estimation is advisory: a non-Fibonacci
+  LLM estimate is snapped to the nearest Fibonacci step in the
+  deterministic sprint contract, ties to the lower step, and
+  the original value is recorded in `sprint.json` under
+  `snapped_from`. Agent files are never rewritten. Example:
   `.venv/bin/python -m scrum_crew.run --auto --resume
   --requirement requirements.md --target tropical_delight`
 - On success, the runner writes `outputs/delivery.md`
