@@ -173,6 +173,18 @@ What a defined run does, in order, with documentation at each phase:
   `outputs/backlog.md` from `sprint.json`, with reasons, for the
   Product Owner to reprioritize in a future sprint. It is never
   automatically included in the next run.
+- Resume after a Phase 1 failure: if Phase 1 files are complete
+  but the run stopped at the gate, fix the missing file from
+  agent output if it can be recovered without inventing it,
+  then run with `--resume` instead of re-running Phase 1.
+  Resume does not archive `outputs/`, does not re-run Phase 1,
+  validates the existing Phase 1 files, builds the runner's
+  `sprint.json` over any agent-written list, and runs Phase 2
+  only. It refuses if your `requirements.md` or `--target`
+  changed since Phase 1, because Phase 2 on stale stories is
+  not a defined run. Example:
+  `.venv/bin/python -m scrum_crew.run --auto --resume
+  --requirement requirements.md --target tropical_delight`
 - On success, the runner writes `outputs/delivery.md`
   deterministically from `sprint.json`, the Phase 2 writes, the
   closure checklist, and the test result, and updates

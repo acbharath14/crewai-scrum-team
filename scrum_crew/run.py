@@ -772,12 +772,44 @@ PHASE2_EXPECTED = {
 }
 
 
-def run_real(auto, requirement_path=None, target_dir="demo_app"):
+def _check_resume(outputs_dir, requirement_text, target_rel):
+    """Check a resume is safe: same requirement, same target.
+
+    Returns a list of errors, empty when resume is allowed. A
+    changed requirement means Phase 1 is stale, so resume is
+    refused instead of running Phase 2 on old stories.
+    """
+    manifest_path = Path(outputs_dir) / "run_manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ["run_manifest.json is missing, cannot resume; "
+                "run a full run instead"]
+    errors = []
+    expected_sha = hashlib.sha256(
+        requirement_text.encode("utf-8")).hexdigest()
+    if manifest.get("requirement_sha256") and \
+            manifest["requirement_sha256"] != expected_sha:
+        errors.append("requirement file changed since Phase 1; "
+                      "resume refused, re-run Phase 1 with the new "
+                      "requirement")
+    if manifest.get("target") and manifest["target"] != target_rel:
+        errors.append(f"target changed since Phase 1 "
+                      f"({manifest['target']} vs {target_rel}); "
+                      "resume refused")
+    return errors
+
+
+def run_real(auto, requirement_path=None, target_dir="demo_app",
+             resume=False):
     """Run the real CrewAI crew on a defined requirement.
 
     Defined-setup mode: requirement_path is mandatory. Without it
     the run refuses to start, because an invented epic is not a
     defined setup. target_dir is the only directory code may go to.
+    With resume=True, Phase 1 is skipped: existing Phase 1 files
+    in outputs/ are validated, the runner's sprint.json is built,
+    and Phase 2 runs only. outputs/ is NOT archived on resume.
     Returns exit code.
     """
     # Imported lazily so --demo never requires CrewAI installed.
@@ -815,29 +847,46 @@ def run_real(auto, requirement_path=None, target_dir="demo_app"):
             print("  ollama serve")
             print("  ollama pull qwen3:8b")
         return 2
-    archived = _archive_previous_outputs()
-    if archived:
-        print(f"Previous outputs archived to {archived}")
-    OUTPUTS.mkdir(exist_ok=True)
-    (OUTPUTS / "requirement.md").write_text(requirement_text,
-                                             encoding="utf-8")
-    manifest = _write_run_manifest(OUTPUTS, requirement_path,
-                                   requirement_text, target_rel, auto)
-    print(f"Requirement: {manifest['requirement_file']} "
-          f"(sha256 {manifest['requirement_sha256'][:12]}...)")
-    print(f"Target: {target_rel}")
-    log_path = OUTPUTS / "progress.log"
-    _append_log(log_path,
-                f"== run {time.strftime('%Y-%m-%d %H:%M:%S')} ==")
-    print("== Phase 1: planning crew ==")
-    planning_progress = PhaseProgress(
-        "Phase 1", phase_plan(PLANNING_TASKS), log_path)
-    planning_progress.start()
-    planning_result = build_planning_crew(
-        task_callback=planning_progress,
-        requirement_text=requirement_text).kickoff()
-    planning_progress.finish()
-    print(planning_result)
+    if resume:
+        if not OUTPUTS.exists():
+            print("Cannot resume: outputs/ does not exist. "
+                  "Run a full run instead.")
+            return 2
+        errors = _check_resume(OUTPUTS, requirement_text, target_rel)
+        if errors:
+            for error in errors:
+                print(f"Resume refused: {error}")
+            return 2
+        print("Resuming from existing Phase 1 outputs in outputs/.")
+        print("Phase 1 crew skipped; outputs/ will NOT be archived.")
+        print(f"Target: {target_rel}")
+        log_path = OUTPUTS / "progress.log"
+        _append_log(log_path,
+                    f"== resume {time.strftime('%Y-%m-%d %H:%M:%S')} ==")
+    else:
+        archived = _archive_previous_outputs()
+        if archived:
+            print(f"Previous outputs archived to {archived}")
+        OUTPUTS.mkdir(exist_ok=True)
+        (OUTPUTS / "requirement.md").write_text(requirement_text,
+                                                 encoding="utf-8")
+        manifest = _write_run_manifest(OUTPUTS, requirement_path,
+                                       requirement_text, target_rel, auto)
+        print(f"Requirement: {manifest['requirement_file']} "
+              f"(sha256 {manifest['requirement_sha256'][:12]}...)")
+        print(f"Target: {target_rel}")
+        log_path = OUTPUTS / "progress.log"
+        _append_log(log_path,
+                    f"== run {time.strftime('%Y-%m-%d %H:%M:%S')} ==")
+        print("== Phase 1: planning crew ==")
+        planning_progress = PhaseProgress(
+            "Phase 1", phase_plan(PLANNING_TASKS), log_path)
+        planning_progress.start()
+        planning_result = build_planning_crew(
+            task_callback=planning_progress,
+            requirement_text=requirement_text).kickoff()
+        planning_progress.finish()
+        print(planning_result)
     # -- Phase 1 gate: files, not terminal text, are done ------------
     errors = _validate_outputs(OUTPUTS, PHASE1_EXPECTED)
     if errors:
@@ -947,11 +996,15 @@ def main(argv=None):
                         help="requirement file for a real run (mandatory)")
     parser.add_argument("--target", default="demo_app",
                         help="target app directory inside the repo")
+    parser.add_argument("--resume", action="store_true",
+                        help="skip Phase 1, run Phase 2 from existing "
+                        "outputs/ (requirement and target must match "
+                        "the original run)")
     args = parser.parse_args(argv)
     if args.demo:
         return run_demo()
     return run_real(auto=args.auto, requirement_path=args.requirement,
-                    target_dir=args.target)
+                    target_dir=args.target, resume=args.resume)
 
 
 if __name__ == "__main__":
