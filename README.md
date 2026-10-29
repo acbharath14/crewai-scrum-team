@@ -155,11 +155,29 @@ What a defined run does, in order, with documentation at each phase:
   parse, implementation notes and tests_map cite every sprint
   story id, at least one code write went to the target directory
   and at least one test write went to `tests/` (from
-  `outputs/tool-calls.log`), then the full pytest suite passes.
-  Any gate failure returns 3 and does not print "Sprint complete".
+  `outputs/tool-calls.log`), then a deterministic sprint closure
+  audit, then the full pytest suite passes. Any gate failure
+  returns 3 and does not print "Sprint complete".
+- Sprint closure audit, in `outputs/closure_audit.md`: every
+  deliverable checked by name, every acceptance criterion covered
+  in both tests_map and validation report, a test file per story
+  named `tests/test_<story-id-lowercase>.py` with a real test
+  citing the story or its criteria, a code file per story citing
+  the story id, implementation notes listing every code file,
+  tests_map listing every test file, deploy smoke naming the
+  server and every story, review naming every story, retrospective
+  actions with owners, and sign-off naming every sprint story
+  and every backlog story. A thin summary that omits a
+  deliverable fails closure, even if the file exists.
+- Backlog is not lost at closure: the runner writes
+  `outputs/backlog.md` from `sprint.json`, with reasons, for the
+  Product Owner to reprioritize in a future sprint. It is never
+  automatically included in the next run.
 - On success, the runner writes `outputs/delivery.md`
-  deterministically from `sprint.json`, the Phase 2 writes, and
-  the test result. It does not invent acceptance: accepted items
+  deterministically from `sprint.json`, the Phase 2 writes, the
+  closure checklist, and the test result, and updates
+  `outputs/run_manifest.json` with sprint, backlog, test, and
+  closure results. It does not invent acceptance: accepted items
   are in `outputs/signoff.md`.
 
 Progress: a real run prints the plan upfront (numbered tasks with

@@ -103,8 +103,11 @@ write_acceptance_tests:
     outputs/tests_map.json. Tests must reference criterion ids and
     story ids. Write tests ONLY in tests/, one file per story, and
     import ONLY from the target app directory named by the runner.
-    You must actually write outputs/tests_map.json with the
-    write_file tool; terminal text alone is not done.
+    Each test file must be named tests/test_<story-id-lowercase>.py
+    and must cite its story id and criterion ids. List every test
+    file you wrote in outputs/tests_map.json. You must actually
+    write outputs/tests_map.json with the write_file tool;
+    terminal text alone is not done.
   expected_output: >
     Acceptance tests plus a criterion-to-test mapping file.
   agent: sdet
@@ -115,10 +118,11 @@ implement:
     Implement every sprint story ONLY in the target app directory
     named by the runner. Do not create code files at the repo root
     or in any other app directory. Reference the story id in code
-    and commit-style notes, and cite every sprint story id in
-    outputs/implementation_notes.md. Keep the test suite green as
-    you go. Save implementation notes to
-    outputs/implementation_notes.md.
+    (a comment naming the story id in each code file for that
+    story) and commit-style notes, cite every sprint story id in
+    outputs/implementation_notes.md, and list every code file you
+    wrote in those notes. Keep the test suite green as you go.
+    Save implementation notes to outputs/implementation_notes.md.
   expected_output: >
     Working code plus implementation notes citing story ids.
   agent: developer
@@ -141,8 +145,8 @@ validate:
     Validate the deployed increment against the ORIGINAL acceptance
     criteria (not against what was built). Produce a traceability
     matrix: every criterion -> test(s) -> PASS/FAIL verdict ->
-    evidence. No verdict without a cited criterion. Save to
-    outputs/validation_report.md.
+    evidence. No criterion may be omitted, and no verdict without
+    a cited criterion. Save to outputs/validation_report.md.
   expected_output: >
     A Markdown validation report with the full traceability matrix.
   agent: sdet
@@ -162,20 +166,31 @@ handle_rework:
 
 sprint_review:
   description: >
-    Summarize the increment demonstrated, what the Product Owner
-    accepted, and what went to the backlog. Any requirement discovered
+    Review EVERY deliverable, deliverable by deliverable, against
+    outputs/sprint.json and outputs/requirement.md: requirement,
+    epic, stories, estimates, sprint, tests_map, implementation
+    notes, code files, test files, deploy smoke, validation report
+    with every criterion id, rework log, and sign-off inputs.
+    For each deliverable state PASS or GAP, with the evidence
+    (file name and story or criterion id). Do NOT write a general
+    summary that omits a deliverable. Name every sprint story id
+    and every file you reviewed. Any requirement discovered
     mid-sprint goes to the backlog, never into the running sprint.
-    Save to outputs/review.md.
+    If any deliverable is missing or incomplete, say so plainly
+    in review.md, do not claim the sprint is complete. Save to
+    outputs/review.md.
   expected_output: >
-    A Markdown sprint review with accepted items and backlog adds.
+    A Markdown sprint review with a PASS/GAP checklist per
+    deliverable, accepted items, and backlog adds.
   agent: scrum_master
   context: [validate, handle_rework]
 
 retrospective:
   description: >
     Run the retrospective: what went well, what to improve, and
-    action items with owners that carry into the next sprint. Save
-    to outputs/retrospective.md.
+    action items that carry into the next sprint. Every action
+    item must name an owner, otherwise it is not an action item.
+    Save to outputs/retrospective.md.
   expected_output: >
     A Markdown retrospective with owned action items.
   agent: scrum_master
@@ -184,9 +199,9 @@ retrospective:
 po_signoff:
   description: >
     Final Product Owner sign-off: confirm the increment matches the
-    original epic, list accepted stories from outputs/sprint.json
-    and the validation report, and record backlog stories with
-    reasons. A backlog story does NOT reject the whole increment;
+    original epic, list every accepted story from outputs/sprint.json
+    and the validation report by id, and record every backlog story
+    with reasons, naming the backlog explicitly. A backlog story does NOT reject the whole increment;
     only an empty sprint rejects it, and the runner stops before
     Phase 2 in that case. Do NOT invent required files: the contract
     files are epic.md, stories.json, estimates_*.json,

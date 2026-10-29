@@ -535,7 +535,173 @@ def _validate_delivery(sprint, outputs_dir, target_dir, log_offset,
     return errors, writes
 
 
-def _write_delivery_doc(outputs_dir, sprint, backlog, writes, test_ok):
+def _read_text(path):
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _story_criteria(outputs_dir, sprint_ids):
+    """Map sprint story id to its acceptance criterion ids."""
+    stories_doc = {}
+    try:
+        stories_doc = json.loads(
+            (Path(outputs_dir) / "stories.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if isinstance(stories_doc, dict):
+        stories = stories_doc.get("stories", [])
+    else:
+        stories = stories_doc
+    result = {}
+    for story in stories:
+        if not isinstance(story, dict) or story.get("id") not in sprint_ids:
+            continue
+        criteria = story.get("acceptance_criteria", [])
+        result[story["id"]] = [
+            c.get("id") for c in criteria if isinstance(c, dict) and c.get("id")]
+    return result
+
+
+def _validate_closure(sprint, backlog, outputs_dir, target_dir, writes,
+                      root=ROOT):
+    """Deterministic sprint closure audit.
+
+    Returns (errors, checklist). Checklist is a list of
+    (name, ok, detail). Every deliverable is checked, not just
+    counted as existing: criterion coverage, code per story,
+    test file per story, notes listing code files, review
+    naming deliverables, sign-off naming sprint and backlog.
+    A thin summary that omits a deliverable fails, even if the
+    file exists.
+    """
+    outputs_dir = Path(outputs_dir)
+    sprint_ids = [s["id"] for s in sprint]
+    backlog_ids = [s["id"] for s in backlog]
+    criteria = _story_criteria(outputs_dir, sprint_ids)
+    all_criteria = [c for ids in criteria.values() for c in ids]
+    texts = {name: _read_text(outputs_dir / name) for name in [
+        "requirement.md", "epic.md", "implementation_notes.md",
+        "tests_map.json", "deploy_smoke.md", "validation_report.md",
+        "rework_log.md", "review.md", "retrospective.md", "signoff.md"]}
+    code_writes = [w for w in writes
+                   if w.startswith(str(target_dir).rstrip("/") + "/")]
+    test_writes = [w for w in writes if w.startswith("tests/")]
+    checklist = []
+
+    def check(name, ok, detail):
+        checklist.append((name, ok, detail))
+        return ok
+
+    check("requirement.md present", bool(texts["requirement.md"].strip()),
+          "requirement.md is missing or empty")
+    check("epic.md present", bool(texts["epic.md"].strip()),
+          "epic.md is missing or empty")
+    check("sprint.json present",
+          (outputs_dir / "sprint.json").exists(),
+          "sprint.json is missing")
+    for story_id in sprint_ids:
+        check(f"tests_map cites {story_id}",
+              story_id in texts["tests_map.json"],
+              f"tests_map.json does not mention {story_id}")
+        check(f"implementation_notes cites {story_id}",
+              story_id in texts["implementation_notes.md"],
+              f"implementation_notes.md does not mention {story_id}")
+        check(f"deploy_smoke cites {story_id}",
+              story_id in texts["deploy_smoke.md"],
+              f"deploy_smoke.md does not mention {story_id}")
+        check(f"review cites {story_id}",
+              story_id in texts["review.md"],
+              f"review.md does not mention {story_id}")
+        check(f"signoff cites {story_id}",
+              story_id in texts["signoff.md"],
+              f"signoff.md does not mention {story_id}")
+        expected_test = f"tests/test_{story_id.lower()}.py"
+        test_path = Path(root) / expected_test
+        test_text = _read_text(test_path) if test_path.exists() else ""
+        check(f"test file {expected_test}",
+              test_path.exists() and "def test_" in test_text
+              and (story_id in test_text
+                   or any(c in test_text for c in criteria.get(story_id, []))),
+              f"{expected_test} is missing, has no test, or cites neither "
+              f"{story_id} nor its criteria")
+        code_texts = [_read_text(Path(root) / w) for w in code_writes]
+        check(f"code cites {story_id}",
+              any(story_id in t for t in code_texts),
+              f"no Phase 2 code file cites {story_id}")
+    for criterion in all_criteria:
+        check(f"tests_map covers {criterion}",
+              criterion in texts["tests_map.json"],
+              f"tests_map.json does not cover {criterion}")
+        check(f"validation covers {criterion}",
+              criterion in texts["validation_report.md"],
+              f"validation_report.md does not cover {criterion}")
+    check("validation has verdicts",
+          "PASS" in texts["validation_report.md"]
+          or "FAIL" in texts["validation_report.md"],
+          "validation_report.md has no PASS/FAIL verdict")
+    for code_file in code_writes:
+        check(f"notes list {code_file}",
+              code_file in texts["implementation_notes.md"],
+              f"implementation_notes.md does not list {code_file}")
+    for test_file in test_writes:
+        check(f"tests_map lists {test_file}",
+              test_file in texts["tests_map.json"],
+              f"tests_map.json does not list {test_file}")
+    check("deploy_smoke mentions server",
+          "server" in texts["deploy_smoke.md"].lower(),
+          "deploy_smoke.md does not mention a server")
+    if "FAIL" in texts["validation_report.md"]:
+        check("rework addresses failures",
+              "rework" in texts["rework_log.md"].lower()
+              or "escalat" in texts["rework_log.md"].lower(),
+              "validation has FAIL but rework_log.md does not mention "
+              "rework or escalation")
+    check("retrospective has owned actions",
+          "owner" in texts["retrospective.md"].lower(),
+          "retrospective.md names no owner for its actions")
+    if backlog_ids:
+        check("signoff names backlog",
+              "backlog" in texts["signoff.md"].lower(),
+              "signoff.md does not name the backlog")
+        for backlog_id in backlog_ids:
+            check(f"signoff names backlog {backlog_id}",
+                  backlog_id in texts["signoff.md"],
+                  f"signoff.md does not name backlog {backlog_id}")
+    check("run_manifest present",
+          (outputs_dir / "run_manifest.json").exists(),
+          "run_manifest.json is missing")
+    errors = [detail for _name, ok, detail in checklist if not ok]
+    return errors, checklist
+
+
+def _write_closure_audit(outputs_dir, checklist):
+    lines = ["# Sprint closure audit", ""]
+    for name, ok, detail in checklist:
+        lines.append(f"- [{'PASS' if ok else 'FAIL'}] {name}"
+                     + ("" if ok else f": {detail}"))
+    (Path(outputs_dir) / "closure_audit.md").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_backlog_doc(outputs_dir, backlog):
+    lines = ["# Backlog for next sprint", "",
+             "These stories did not enter the sprint. The Product Owner "
+             "reprioritizes them for a future sprint; they are NOT "
+             "automatically included in the next run.", ""]
+    if not backlog:
+        lines.append("No backlog stories.")
+    for story in backlog:
+        reasons = "; ".join(story.get("reasons", []))
+        lines.append(f"- {story['id']}: {story.get('title', '')}"
+                     + (f" - {reasons}" if reasons else ""))
+    (Path(outputs_dir) / "backlog.md").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_delivery_doc(outputs_dir, sprint, backlog, writes, test_ok,
+                        checklist=None):
     """Write outputs/delivery.md deterministically from run evidence."""
     lines = ["# Delivery", "",
              "Sprint stories (from outputs/sprint.json):"]
@@ -552,6 +718,13 @@ def _write_delivery_doc(outputs_dir, sprint, backlog, writes, test_ok):
         lines.append(f"- {path}")
     lines.append("")
     lines.append(f"Test suite gate: {'PASS' if test_ok else 'FAIL'}")
+    if checklist:
+        lines.append("")
+        lines.append("Closure audit (from outputs/closure_audit.md):")
+        for name, ok, _detail in checklist:
+            lines.append(f"- [{'PASS' if ok else 'FAIL'}] {name}")
+    lines.append("")
+    lines.append("Backlog for next sprint: outputs/backlog.md")
     lines.append("PO sign-off file: outputs/signoff.md "
                  "(see that file for accepted items; this delivery "
                  "doc does not invent acceptance).")
@@ -725,6 +898,18 @@ def run_real(auto, requirement_path=None, target_dir="demo_app"):
               "tests to tests/, and both docs must cite every "
               "sprint story id.")
         return 3
+    _write_backlog_doc(OUTPUTS, backlog)
+    errors, checklist = _validate_closure(sprint, backlog, OUTPUTS,
+                                          target_rel, writes)
+    _write_closure_audit(OUTPUTS, checklist)
+    if errors:
+        print("\nSprint closure audit FAILED, sprint is NOT complete:")
+        for error in errors:
+            print(f"  - {error}")
+        print("Full checklist in outputs/closure_audit.md. Fix the "
+              "named gaps and re-run; a thin summary does not close "
+              "a sprint.")
+        return 3
     print("\n== Test suite gate: full pytest run ==")
     ok, tail = _run_test_suite()
     if not ok:
@@ -733,7 +918,19 @@ def run_real(auto, requirement_path=None, target_dir="demo_app"):
         print("Fix the failing tests and re-run; a red suite blocks "
               "sign-off, even when all output files exist.")
         return 3
-    _write_delivery_doc(OUTPUTS, sprint, backlog, writes, ok)
+    manifest_path = OUTPUTS / "run_manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        manifest = {}
+    manifest.update({"sprint": [s["id"] for s in sprint],
+                     "backlog": [s["id"] for s in backlog],
+                     "test_gate": "PASS" if ok else "FAIL",
+                     "closure_audit": "PASS",
+                     "ended_at": time.strftime("%Y-%m-%d %H:%M:%S")})
+    manifest_path.write_text(json.dumps(manifest, indent=2),
+                             encoding="utf-8")
+    _write_delivery_doc(OUTPUTS, sprint, backlog, writes, ok, checklist)
     print("Delivery documented in outputs/delivery.md")
     print("Sprint complete.")
     return 0
