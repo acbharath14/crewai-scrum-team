@@ -1,8 +1,12 @@
 # CrewAI Scrum Team
 
-A demonstration of a multi-agent Scrum team built with
+A multi-agent Scrum team built with
 [CrewAI](https://www.crewai.com/) running on a **local Ollama model** —
-no paid APIs, no API keys, no cloud LLM calls.
+no paid APIs, no API keys, no cloud LLM calls. It is built to deliver
+on a defined requirement, not to invent one: a real run starts from
+a requirement file you write, builds only in the target directory
+you name, documents every phase in `outputs/`, and only claims
+complete when files, code location, and the test suite all pass.
 
 Five agents play a Scrum team: **Product Owner, Business Analyst,
 Scrum Master, Developer, and SDET**. They take a business epic through
@@ -118,15 +122,45 @@ Ready gate, and stays in the backlog for an estimation discussion.
 The demo writes `outputs/validation_report.md` (the traceability
 matrix) and `outputs/sprint_summary.md`.
 
-## Real crew run (on a machine with Ollama)
+## Real crew run: defined setup (on a machine with Ollama)
+
+A real run requires a requirement file. Without one it refuses to
+start, so the Product Owner cannot invent a product.
 
 ```bash
 ollama serve
 ollama pull qwen3:8b
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m scrum_crew.run          # gates ask for PO approval
-.venv/bin/python -m scrum_crew.run --auto   # skip gates (unattended)
+cp examples/defined-setup-requirements.md requirements.md
+# edit requirements.md for your product, then:
+.venv/bin/python -m scrum_crew.run --requirement requirements.md --target demo_app
+.venv/bin/python -m scrum_crew.run --auto --requirement requirements.md --target demo_app
 ```
+
+What a defined run does, in order, with documentation at each phase:
+
+- Copies your requirement verbatim to `outputs/requirement.md` and
+  records its SHA-256, target, backend, and start time in
+  `outputs/run_manifest.json`. A previous run's `outputs/` is
+  archived to `outputs-<timestamp>/` first, never overwritten.
+- Phase 1: epic, stories, estimates, advisory convergence, DoR,
+  then a deterministic `outputs/sprint.json` built from stories
+  plus estimates, not from LLM arithmetic. Empty sprint stops
+  before Phase 2.
+- Phase 2: acceptance tests in `tests/` (one file per story),
+  implementation only in the target directory, local deploy and
+  smoke, validation against the original requirement, rework
+  capped at 2, review, retrospective, PO sign-off.
+- Gates after Phase 2, in order: all Phase 2 files exist and
+  parse, implementation notes and tests_map cite every sprint
+  story id, at least one code write went to the target directory
+  and at least one test write went to `tests/` (from
+  `outputs/tool-calls.log`), then the full pytest suite passes.
+  Any gate failure returns 3 and does not print "Sprint complete".
+- On success, the runner writes `outputs/delivery.md`
+  deterministically from `sprint.json`, the Phase 2 writes, and
+  the test result. It does not invent acceptance: accepted items
+  are in `outputs/signoff.md`.
 
 Progress: a real run prints the plan upfront (numbered tasks with
 agent names), then one line per finished task with elapsed time and
@@ -178,6 +212,11 @@ commands but never installs Ollama or downloads models.
   Ollama.** Sandbox verification covers crew construction (agents and
   tasks load from YAML, the crew object builds) but not a full LLM
   kickoff — there is no Ollama in the sandbox.
+- **A defined run is still a local-model run, not a guarantee.**
+  An 8B model can still write weak code, miss an edge case, or
+  need rework. The gates catch missing files, wrong locations,
+  and red suites, but a human must still review `outputs/`,
+  `delivery.md`, and the code before treating it as done.
 - **In-memory demo storage.** The Task Board loses tasks on restart.
   That is accepted, documented tech debt for the worked example, not
   a recommendation.

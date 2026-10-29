@@ -23,6 +23,7 @@ localhost and smoke check it. There is no cloud target.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -418,6 +419,146 @@ def _build_sprint_json(outputs_dir):
     return sprint, backlog, errors
 
 
+def _load_requirement(path):
+    """Load a requirement file; empty or missing is a hard error.
+
+    A defined-setup run never invents an epic. If no requirement
+    is supplied, the runner refuses to start, instead of letting
+    the Product Owner invent a product.
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    if not text.strip():
+        raise ValueError(f"requirement file {path} is empty")
+    return text
+
+
+def _resolve_target(target, root=ROOT):
+    """Resolve a target dir inside the repo; raise on escape/missing."""
+    base = Path(root).resolve()
+    candidate = Path(target)
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError:
+        raise ValueError(f"target {target} is outside the repo directory")
+    if not resolved.is_dir():
+        raise ValueError(f"target {target} is not an existing directory")
+    return resolved
+
+
+def _archive_previous_outputs(outputs_dir=OUTPUTS, root=ROOT):
+    """Archive a previous run's outputs/ instead of overwriting it.
+
+    Returns the archive path, or None when outputs/ is empty or
+    absent. Code in the target directory is NOT archived: a new
+    sprint builds on the previous increment, it does not wipe it.
+    """
+    outputs_dir = Path(outputs_dir)
+    if not outputs_dir.exists():
+        return None
+    if not any(outputs_dir.iterdir()):
+        return None
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    archive = Path(root) / f"outputs-{stamp}"
+    outputs_dir.rename(archive)
+    return archive
+
+
+def _write_run_manifest(outputs_dir, requirement_path, requirement_text,
+                        target_dir, auto):
+    """Write outputs/run_manifest.json: the audit record for the run."""
+    manifest = {
+        "requirement_file": str(requirement_path),
+        "requirement_sha256": hashlib.sha256(
+            requirement_text.encode("utf-8")).hexdigest(),
+        "target": str(target_dir),
+        "auto": auto,
+        "backend": "llama-server" if os.environ.get("LLAMA_SERVER_URL")
+        else "ollama",
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    (Path(outputs_dir) / "run_manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
+
+
+def _phase2_writes(log_path, offset, root=ROOT):
+    """Parse tool-calls.log writes made after a byte offset."""
+    log_path = Path(log_path)
+    if not log_path.exists():
+        return []
+    text = log_path.read_bytes()[offset:].decode("utf-8", errors="replace")
+    writes = []
+    for line in text.splitlines():
+        if " write " not in line:
+            continue
+        middle = line.split(" write ", 1)[1]
+        path_text = middle.rsplit(" (", 1)[0]
+        try:
+            rel = Path(path_text).resolve().relative_to(Path(root).resolve())
+        except ValueError:
+            continue
+        writes.append(str(rel))
+    return writes
+
+
+def _validate_delivery(sprint, outputs_dir, target_dir, log_offset,
+                       root=ROOT):
+    """Validate Phase 2 delivery, not just Phase 2 files.
+
+    Errors when: implementation notes or tests_map do not mention a
+    sprint story id, no code write went to the target directory,
+    or no test write went to tests/ since Phase 2 started. This
+    is what catches a run that talks about code in terminal text
+    but writes nothing, or writes a lone file at the repo root.
+    """
+    outputs_dir = Path(outputs_dir)
+    errors = []
+    notes = (outputs_dir / "implementation_notes.md").read_text(
+        encoding="utf-8") if (outputs_dir / "implementation_notes.md").exists() else ""
+    tests_map = (outputs_dir / "tests_map.json").read_text(
+        encoding="utf-8") if (outputs_dir / "tests_map.json").exists() else ""
+    for story in sprint:
+        story_id = story["id"]
+        if story_id not in notes:
+            errors.append(f"implementation_notes.md does not mention {story_id}")
+        if story_id not in tests_map:
+            errors.append(f"tests_map.json does not mention {story_id}")
+    writes = _phase2_writes(outputs_dir / "tool-calls.log", log_offset, root)
+    target_prefix = str(target_dir).rstrip("/") + "/"
+    if not any(w.startswith(target_prefix) for w in writes):
+        errors.append(f"no code write to {target_dir}/ in Phase 2")
+    if not any(w.startswith("tests/") for w in writes):
+        errors.append("no test write to tests/ in Phase 2")
+    return errors, writes
+
+
+def _write_delivery_doc(outputs_dir, sprint, backlog, writes, test_ok):
+    """Write outputs/delivery.md deterministically from run evidence."""
+    lines = ["# Delivery", "",
+             "Sprint stories (from outputs/sprint.json):"]
+    for story in sprint:
+        lines.append(f"- {story['id']}: {story.get('title', '')} "
+                     f"(advisory locked {story.get('locked')})")
+    lines.append("")
+    lines.append("Backlog (not Ready):")
+    for story in backlog:
+        lines.append(f"- {story['id']}: {story.get('title', '')}")
+    lines.append("")
+    lines.append("Files written in Phase 2 (from outputs/tool-calls.log):")
+    for path in sorted(set(writes)):
+        lines.append(f"- {path}")
+    lines.append("")
+    lines.append(f"Test suite gate: {'PASS' if test_ok else 'FAIL'}")
+    lines.append("PO sign-off file: outputs/signoff.md "
+                 "(see that file for accepted items; this delivery "
+                 "doc does not invent acceptance).")
+    (Path(outputs_dir) / "delivery.md").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _run_test_suite(path="tests", python=sys.executable, timeout=300):
     """Run the full pytest suite deterministically, return (ok, tail).
 
@@ -458,8 +599,14 @@ PHASE2_EXPECTED = {
 }
 
 
-def run_real(auto):
-    """Run the real CrewAI crew (needs Ollama). Returns exit code."""
+def run_real(auto, requirement_path=None, target_dir="demo_app"):
+    """Run the real CrewAI crew on a defined requirement.
+
+    Defined-setup mode: requirement_path is mandatory. Without it
+    the run refuses to start, because an invented epic is not a
+    defined setup. target_dir is the only directory code may go to.
+    Returns exit code.
+    """
     # Imported lazily so --demo never requires CrewAI installed.
     from .crew import (
         EXECUTION_TASKS,
@@ -469,6 +616,20 @@ def run_real(auto):
         phase_plan,
     )
 
+    if requirement_path is None:
+        print("Real run requires --requirement FILE.")
+        print("Create a requirements file first, then run with:")
+        print("  python -m scrum_crew.run --auto "
+              "--requirement requirements.md --target demo_app")
+        print("An invented epic is not a defined setup.")
+        return 2
+    try:
+        requirement_text = _load_requirement(requirement_path)
+        target_resolved = _resolve_target(target_dir)
+        target_rel = str(target_resolved.relative_to(ROOT.resolve()))
+    except (OSError, ValueError) as exc:
+        print(f"Defined-setup error: {exc}")
+        return 2
     if not _backend_reachable():
         llama_url = os.environ.get("LLAMA_SERVER_URL")
         if llama_url:
@@ -481,7 +642,17 @@ def run_real(auto):
             print("  ollama serve")
             print("  ollama pull qwen3:8b")
         return 2
+    archived = _archive_previous_outputs()
+    if archived:
+        print(f"Previous outputs archived to {archived}")
     OUTPUTS.mkdir(exist_ok=True)
+    (OUTPUTS / "requirement.md").write_text(requirement_text,
+                                             encoding="utf-8")
+    manifest = _write_run_manifest(OUTPUTS, requirement_path,
+                                   requirement_text, target_rel, auto)
+    print(f"Requirement: {manifest['requirement_file']} "
+          f"(sha256 {manifest['requirement_sha256'][:12]}...)")
+    print(f"Target: {target_rel}")
     log_path = OUTPUTS / "progress.log"
     _append_log(log_path,
                 f"== run {time.strftime('%Y-%m-%d %H:%M:%S')} ==")
@@ -490,7 +661,8 @@ def run_real(auto):
         "Phase 1", phase_plan(PLANNING_TASKS), log_path)
     planning_progress.start()
     planning_result = build_planning_crew(
-        task_callback=planning_progress).kickoff()
+        task_callback=planning_progress,
+        requirement_text=requirement_text).kickoff()
     planning_progress.finish()
     print(planning_result)
     # -- Phase 1 gate: files, not terminal text, are done ------------
@@ -522,11 +694,14 @@ def run_real(auto):
         input("\n[Human gate] Product Owner: press Enter to approve "
               "sprint execution, or Ctrl-C to stop...")
     print("\n== Phase 2: execution crew ==")
+    tool_log = OUTPUTS / "tool-calls.log"
+    log_offset = tool_log.stat().st_size if tool_log.exists() else 0
     execution_progress = PhaseProgress(
         "Phase 2", phase_plan(EXECUTION_TASKS), log_path)
     execution_progress.start()
     execution_result = build_execution_crew(
-        task_callback=execution_progress).kickoff()
+        task_callback=execution_progress,
+        target_dir=target_rel).kickoff()
     execution_progress.finish()
     print(execution_result)
     if not auto:
@@ -540,6 +715,16 @@ def run_real(auto):
         print("A task counts as done only when its file exists; "
               "terminal text alone is not done.")
         return 3
+    errors, writes = _validate_delivery(sprint, OUTPUTS, target_rel,
+                                        log_offset)
+    if errors:
+        print("\nPhase 2 delivery incomplete, sprint is NOT complete:")
+        for error in errors:
+            print(f"  - {error}")
+        print("Code must be written to the target directory and "
+              "tests to tests/, and both docs must cite every "
+              "sprint story id.")
+        return 3
     print("\n== Test suite gate: full pytest run ==")
     ok, tail = _run_test_suite()
     if not ok:
@@ -548,6 +733,8 @@ def run_real(auto):
         print("Fix the failing tests and re-run; a red suite blocks "
               "sign-off, even when all output files exist.")
         return 3
+    _write_delivery_doc(OUTPUTS, sprint, backlog, writes, ok)
+    print("Delivery documented in outputs/delivery.md")
     print("Sprint complete.")
     return 0
 
@@ -559,10 +746,15 @@ def main(argv=None):
                         help="scripted demo: canned agent text + real tests")
     parser.add_argument("--auto", action="store_true",
                         help="skip human-in-the-loop gates (real run only)")
+    parser.add_argument("--requirement", default=None,
+                        help="requirement file for a real run (mandatory)")
+    parser.add_argument("--target", default="demo_app",
+                        help="target app directory inside the repo")
     args = parser.parse_args(argv)
     if args.demo:
         return run_demo()
-    return run_real(auto=args.auto)
+    return run_real(auto=args.auto, requirement_path=args.requirement,
+                    target_dir=args.target)
 
 
 if __name__ == "__main__":

@@ -10,9 +10,12 @@
 
 define_epic:
   description: >
-    Write the business epic as Markdown: business goal, why now, scope,
-    explicit out-of-scope items, and accepted tech debt. Save it to
-    outputs/epic.md.
+    Write the business epic ONLY from the requirement provided at
+    initiation. Do not invent a product, scope, or stories beyond
+    that requirement. If any part is ambiguous, record it as an open
+    question in the epic, do not invent a feature to fill it. Epic
+    format: business goal, why now, scope, explicit out-of-scope
+    items, and accepted tech debt. Save it to outputs/epic.md.
   expected_output: >
     A Markdown epic file with goal, scope, out-of-scope, and tech debt.
   agent: product_owner
@@ -97,7 +100,9 @@ write_acceptance_tests:
     (DoR PASS only), write acceptance tests derived FROM its
     acceptance criteria, one test per criterion or rejection path,
     and record the criterion-to-test mapping in
-    outputs/tests_map.json. Tests must reference criterion ids.
+    outputs/tests_map.json. Tests must reference criterion ids and
+    story ids. Write tests ONLY in tests/, one file per story, and
+    import ONLY from the target app directory named by the runner.
     You must actually write outputs/tests_map.json with the
     write_file tool; terminal text alone is not done.
   expected_output: >
@@ -107,9 +112,13 @@ write_acceptance_tests:
 
 implement:
   description: >
-    Implement every sprint story, referencing the story id in code
-    and commit-style notes. Keep the test suite green as you go.
-    Save implementation notes to outputs/implementation_notes.md.
+    Implement every sprint story ONLY in the target app directory
+    named by the runner. Do not create code files at the repo root
+    or in any other app directory. Reference the story id in code
+    and commit-style notes, and cite every sprint story id in
+    outputs/implementation_notes.md. Keep the test suite green as
+    you go. Save implementation notes to
+    outputs/implementation_notes.md.
   expected_output: >
     Working code plus implementation notes citing story ids.
   agent: developer
@@ -117,7 +126,8 @@ implement:
 
 deploy_and_smoke:
   description: >
-    Deploy locally: start the app server on localhost and smoke check
+    Deploy locally: start the app server from the target app
+    directory named by the runner, on localhost, and smoke check
     each sprint story's happy path. "Deploy" here means local only --
     no cloud target exists. Record the smoke result in
     outputs/deploy_smoke.md.

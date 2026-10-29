@@ -127,16 +127,23 @@ def build_agents():
     return agents
 
 
-def build_tasks(agents, wanted):
-    """Build Task objects for the named stages, wiring context chains."""
+def build_tasks(agents, wanted, task_overrides=None):
+    """Build Task objects for the named stages, wiring context chains.
+
+    task_overrides maps task name to a full replacement description.
+    The runner uses it to inject the initiation requirement and the
+    target directory, so agents work on a defined setup instead of
+    inventing one. Without overrides, tasks use tasks.yaml verbatim.
+    """
     configs = _load_yaml("tasks.yaml")
     tasks = {}
     for name in wanted:
         cfg = configs[name]
         context = [tasks[dep] for dep in cfg.get("context", [])
                    if dep in tasks]
+        description = (task_overrides or {}).get(name, cfg["description"])
         tasks[name] = Task(
-            description=cfg["description"],
+            description=description,
             expected_output=cfg["expected_output"],
             agent=agents[cfg["agent"]],
             context=context,
@@ -160,24 +167,71 @@ def phase_plan(wanted):
     return plan
 
 
-def build_planning_crew(task_callback=None):
-    """Crew for Phase 1: epic -> stories -> estimates -> DoR."""
+def build_planning_crew(task_callback=None, requirement_text=None,
+                        target_dir=None):
+    """Crew for Phase 1: epic -> stories -> estimates -> DoR.
+
+    When requirement_text is given, it is injected verbatim into the
+    define_epic task, so the epic is built ONLY from the defined
+    requirement at initiation, never invented by the agent.
+    """
     agents = build_agents()
+    overrides = {}
+    if requirement_text:
+        base = _load_yaml("tasks.yaml")["define_epic"]["description"]
+        overrides["define_epic"] = (
+            "REQUIREMENT (authoritative, provided at initiation; "
+            "do not invent scope beyond it):\n"
+            f"{requirement_text}\n\n{base} "
+            "The epic must cover ONLY this requirement. If any part "
+            "of the requirement is ambiguous, record it as an open "
+            "question in epic.md, do not invent a feature to fill it."
+        )
     return Crew(
         agents=list(agents.values()),
-        tasks=build_tasks(agents, PLANNING_TASKS),
+        tasks=build_tasks(agents, PLANNING_TASKS, overrides),
         process=Process.sequential,
         verbose=False,
         task_callback=task_callback,
     )
 
 
-def build_execution_crew(task_callback=None):
-    """Crew for Phase 2: tests -> implement -> deploy -> validate -> close."""
+def build_execution_crew(task_callback=None, target_dir="demo_app"):
+    """Crew for Phase 2: tests -> implement -> deploy -> validate -> close.
+
+    target_dir is the defined implementation target. Code goes ONLY
+    there, tests go ONLY in tests/, so a run cannot deliver a lone
+    file at the repo root like the old CPU run's user.py.
+    """
     agents = build_agents()
+    configs = _load_yaml("tasks.yaml")
+    overrides = {
+        "write_acceptance_tests": (
+            f"Target app directory is {target_dir}. Write tests ONLY "
+            "in tests/, one file per story named "
+            "tests/test_<story-id-lowercase>.py, importing from the "
+            f"{target_dir} package. "
+            f"{configs['write_acceptance_tests']['description']}"
+        ),
+        "implement": (
+            f"Implement ONLY in {target_dir}/. Do not create code "
+            "files at the repo root or in any other app directory. "
+            f"{configs['implement']['description']}"
+        ),
+        "deploy_and_smoke": (
+            f"Start the app server from {target_dir}/. "
+            f"{configs['deploy_and_smoke']['description']}"
+        ),
+        "validate": (
+            "Validate against outputs/sprint.json and the original "
+            "requirement in outputs/requirement.md, not against what "
+            "was built. "
+            f"{configs['validate']['description']}"
+        ),
+    }
     return Crew(
         agents=list(agents.values()),
-        tasks=build_tasks(agents, EXECUTION_TASKS),
+        tasks=build_tasks(agents, EXECUTION_TASKS, overrides),
         process=Process.sequential,
         verbose=False,
         task_callback=task_callback,
