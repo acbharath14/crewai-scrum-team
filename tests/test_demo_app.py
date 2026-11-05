@@ -17,19 +17,17 @@ from http.server import ThreadingHTTPServer
 
 # -- store: create ----------------------------------------------------------
 
-def test_create_task_valid():
+@pytest.mark.parametrize("extra_fields,expected_assignee", [
+    ({}, None),
+    ({"assignee": "Ada"}, "Ada"),
+])
+def test_create_task_defaults(extra_fields, expected_assignee):
     store = TaskStore()
-    task = store.create({"title": "Write spec"})
+    task = store.create({"title": "Write spec", **extra_fields})
     assert task["id"] == 1
     assert task["status"] == "todo"
     assert task["priority"] == "medium"
-
-
-def test_create_task_defaults():
-    store = TaskStore()
-    task = store.create({"title": "Write spec", "assignee": "Ada"})
-    assert task["status"] == "todo"
-    assert task["assignee"] == "Ada"
+    assert task["assignee"] == expected_assignee
 
 
 def test_create_task_missing_title():
