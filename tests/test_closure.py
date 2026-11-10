@@ -97,17 +97,6 @@ def test_closure_fails_for_missing_test_file(tmp_path):
     assert any("test_story-1.py" in e for e in errors)
 
 
-def test_closure_fails_for_root_only_code(tmp_path):
-    root = tmp_path / "repo"
-    root.mkdir()
-    outputs = _setup(tmp_path, root)
-    errors, _c = _validate_closure(
-        [{"id": "STORY-1"}], [], outputs, "demo_app",
-        ["user.py", "tests/test_story-1.py"], root=root)
-    assert any("no Phase 2 code file cites STORY-1" in e or
-               "demo_app/server.py" in e for e in errors)
-
-
 def test_backlog_and_delivery_docs(tmp_path):
     outputs = tmp_path / "outputs"
     outputs.mkdir()

@@ -6,6 +6,8 @@ nearest step instead of stopping the sprint, and records the
 original values so the change is auditable.
 """
 
+import pytest
+
 from scrum_crew.pipeline import advisory_lock, snap_to_fibonacci
 
 
@@ -24,25 +26,30 @@ def test_snap_tie_goes_to_lower_step():
     assert snap_to_fibonacci(4) == 3
 
 
-def test_advisory_lock_snaps_st003_and_records_original():
-    # Tropical ST003: developer 8, sdet 13, analyst 10.
-    result = advisory_lock(8, 13, 10)
-    assert result["locked"] == 8
-    assert result["estimates"] == {"developer": 8, "sdet": 13,
-                                   "analyst": 8}
-    assert result["snapped_from"] == {"analyst": 10}
+@pytest.mark.parametrize(
+    "developer,sdet,analyst,locked,snapped_estimates,snapped_from",
+    [
+        # Tropical ST003: developer 8, sdet 13, analyst 10.
+        (8, 13, 10, 8,
+         {"developer": 8, "sdet": 13, "analyst": 8},
+         {"analyst": 10}),
+        # Tropical ST004: developer 13, sdet 10, analyst 12.
+        (13, 10, 12, 13,
+         {"developer": 13, "sdet": 8, "analyst": 13},
+         {"sdet": 10, "analyst": 12}),
+    ],
+)
+def test_advisory_lock_snaps_and_records_original(
+        developer, sdet, analyst, locked, snapped_estimates, snapped_from):
+    result = advisory_lock(developer, sdet, analyst)
+    assert result["locked"] == locked
+    assert result["estimates"] == snapped_estimates
+    assert result["snapped_from"] == snapped_from
 
 
-def test_advisory_lock_snaps_st004_and_records_originals():
-    # Tropical ST004: developer 13, sdet 10, analyst 12.
-    result = advisory_lock(13, 10, 12)
-    assert result["locked"] == 13
-    assert result["estimates"] == {"developer": 13, "sdet": 8,
-                                   "analyst": 13}
-    assert result["snapped_from"] == {"sdet": 10, "analyst": 12}
-
-
-def test_advisory_lock_clean_values_have_empty_snapped_from():
+def test_advisory_lock_for_5_8_8_is_8_not_null():
     result = advisory_lock(5, 8, 8)
     assert result["locked"] == 8
+    assert result["spread_steps"] == 1
+    assert result["spread_points"] == 3
     assert result["snapped_from"] == {}

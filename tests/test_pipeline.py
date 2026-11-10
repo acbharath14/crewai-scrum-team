@@ -33,17 +33,15 @@ def story(**overrides):
 
 # -- estimation convergence ----------------------------------------------
 
-def test_converged_estimates_lock_to_median():
-    result = converge_estimates(5, 5, 3)
+@pytest.mark.parametrize("developer,sdet,analyst,locked", [
+    (5, 5, 3, 5),
+    (3, 3, 5, 3),
+])
+def test_one_step_spread_is_not_divergence(developer, sdet, analyst, locked):
+    result = converge_estimates(developer, sdet, analyst)
     assert result["divergent"] is False
     assert result["spread_steps"] == 1
-    assert result["locked"] == 5
-
-
-def test_one_step_spread_is_not_divergence():
-    result = converge_estimates(3, 3, 5)
-    assert result["divergent"] is False
-    assert result["locked"] == 3
+    assert result["locked"] == locked
 
 
 def test_two_step_spread_is_divergence():

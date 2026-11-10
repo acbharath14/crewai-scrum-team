@@ -10,7 +10,7 @@ import json
 
 import sys
 
-from scrum_crew.pipeline import advisory_lock, dor_check_advisory
+from scrum_crew.pipeline import dor_check_advisory
 from scrum_crew.run import (
     _build_sprint_json,
     _estimate_value,
@@ -29,13 +29,6 @@ def story():
         "risks": [],
         "testable": True,
     }
-
-
-def test_advisory_lock_for_5_8_8_is_8_not_null():
-    result = advisory_lock(5, 8, 8)
-    assert result["locked"] == 8
-    assert result["spread_steps"] == 1
-    assert result["spread_points"] == 3
 
 
 def test_advisory_dor_does_not_fail_for_points():
