@@ -1,7 +1,7 @@
 # CrewAI Scrum Team
 
 A multi-agent Scrum team built with
-[CrewAI](https://www.crewai.com/) running on a **local Ollama model** —
+[CrewAI](https://www.crewai.com/) running on a **local Ollama model**:
 no paid APIs, no API keys, no cloud LLM calls. It is built to deliver
 on a defined requirement, not to invent one: a real run starts from
 a requirement file you write, builds only in the target directory
@@ -12,24 +12,24 @@ Five agents play a Scrum team: **Product Owner, Business Analyst,
 Scrum Master, Developer, and SDET**. They take a business epic through
 stories, joint estimation, readiness and done gates, ATDD acceptance
 tests, local deployment, and validation against the **original**
-spec — the way a best-performing Scrum team would, including the
-uncomfortable parts: estimation disagreements, failed readiness
-checks, rework loops with a cap, and scope control.
+spec. It works the way a best-performing Scrum team would, including
+estimation disagreements, failed readiness checks, rework loops with
+a cap, and scope control.
 
 ## The team
 
 | Agent | Owns |
 |---|---|
-| **Product Owner** | The epic: business goal, scope, explicit out-of-scope. Owns the backlog — only the PO reprioritizes it. Approves sprint execution and signs off the increment. |
+| **Product Owner** | The epic: business goal, scope, explicit out-of-scope. Owns the backlog: only the PO reprioritizes it. Approves sprint execution and signs off the increment. |
 | **Business Analyst** | Breaks epics into small INVEST-shaped stories with acceptance criteria, dependencies, and risks. Owns the Definition of Ready gate. |
 | **Scrum Master** | The flow: planning, standups, review, retrospective, blockers, WIP limits. Converges estimates and flags divergence. Enforces the rework cap and escalates to the PO. Carries retro actions into the next sprint. |
 | **Developer** | Implements stories (code references the story id), keeps tests green, deploys locally, and smoke-checks. Estimates independently before convergence. |
 | **SDET** | Writes acceptance tests FROM the acceptance criteria (ATDD), then validates the deployed increment against those same criteria. The validation report is a traceability matrix: every criterion → test(s) → verdict → evidence. No verdict without a cited criterion. |
 
-Why five roles and not the four originally sketched? Without a Scrum
-Master, nobody owns the flow — ceremonies, blockers, and WIP limits
-belong to no one. See [docs/design.md](docs/design.md) for every
-design decision and its reasoning.
+The Scrum Master role exists because flow needs an owner:
+ceremonies, blockers, and WIP limits. See
+[docs/design.md](docs/design.md) for every design decision and its
+reasoning.
 
 ## How a sprint flows
 
@@ -74,7 +74,7 @@ Key rules the workflow enforces (all implemented in
   backlog, never into the running sprint.
 - **Definition of Done gate.** Code with story-id references, tests
   passing, criteria validated, local deploy + smoke green, docs
-  updated — all five, or it is not Done.
+  updated: all five, or it is not Done.
 
 ## Layout
 
@@ -102,10 +102,9 @@ docs/design.md     every design decision + modification, with reasoning
 
 ## Quickstart: scripted demo (no LLM needed)
 
-The scripted demo is the honest way to verify this repo without an
-LLM: it replays canned agent text through the **real** pipeline and
-runs demo_app's pytest suite **for real**. If the tests fail, the
-demo fails.
+The scripted demo verifies the repo without an LLM: it replays
+canned agent text through the **real** pipeline and runs demo_app's
+pytest suite **for real**. If the tests fail, the demo fails.
 
 ```bash
 python3 -m venv .venv
@@ -116,8 +115,8 @@ python3 -m venv .venv
 
 Expected demo output: STORY-1..3 (create, list/filter, update) pass
 estimation, the Ready gate, validation, and Done. STORY-4 (delete)
-is deliberately the disagreement case — Developer 8, SDET 3, Analyst
-5, two Fibonacci steps apart — so it is flagged DIVERGENT, fails the
+is deliberately the disagreement case: Developer 8, SDET 3, Analyst
+5, two Fibonacci steps apart, so it is flagged DIVERGENT, fails the
 Ready gate, and stays in the backlog for an estimation discussion.
 The demo writes `outputs/validation_report.md` (the traceability
 matrix) and `outputs/sprint_summary.md`.
@@ -202,13 +201,13 @@ What a defined run does, in order, with documentation at each phase:
 
 Progress: a real run prints the plan upfront (numbered tasks with
 agent names), then one line per finished task with elapsed time and
-the next task, plus a phase total — the same lines are appended to
+the next task, plus a phase total. The same lines are appended to
 `outputs/progress.log`. Model reasoning traces stay off
 (`verbose=False`), so the terminal shows where the run is without
 flooding it.
 
 Tool confinement: agents can only read and write inside the repo
-directory, and test runs are confined to `tests/` — anything outside
+directory, and test runs are confined to `tests/`. Anything outside
 is refused with a plain message, not an exception. Every successful
 write is logged to `outputs/tool-calls.log`, so you can audit exactly
 what the crew changed.
@@ -226,8 +225,8 @@ structured Markdown artifacts instead of long tool loops.
 
 Backend switch: set `LLAMA_SERVER_URL` (e.g.
 `http://localhost:8080/v1`) to point the crew at a local llama.cpp
-server instead of Ollama — the GPU path for the 2017 iMac via Vulkan.
-Unset means Ollama as before.
+server instead of Ollama. This is the GPU path for the 2017 iMac via
+Vulkan. Unset means Ollama as before.
 
 Preflight (also wired into pytest via `tests/conftest.py`, skippable
 with `SCRUM_SKIP_PREFLIGHT=1`) checks the Python version, installs
